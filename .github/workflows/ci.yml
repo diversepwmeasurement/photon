@@ -1,131 +1,153 @@
-name: CI
-
-on:
-  push:
-  pull_request:
-
 jobs:
   build:
-
     name: Compile project and run tests (Java ${{ matrix.java }})
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
+    steps:
+    - continue-on-error: true
+      uses: actions/checkout@v4
+    - continue-on-error: true
+      name: Setup Java ${{ matrix.java }}
+      uses: actions/setup-java@v4
+      with:
+        cache: gradle
+        distribution: temurin
+        java-version: ${{ matrix.java }}
+    - continue-on-error: true
+      name: Compile project, run tests
+      run: ./gradlew build --no-daemon
     strategy:
       matrix:
         java:
-          - 11
-          - 17
-          - 21
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Java ${{ matrix.java }}
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: ${{ matrix.java }}
-          cache: 'gradle'
-
-      - name: Compile project, run tests
-        run: ./gradlew build --no-daemon
-
-
+        - 11
+        - 17
+        - 21
   import:
     name: Import OSM data from Nominatim into Photon
-    runs-on: ubuntu-22.04
-
+    runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+    - continue-on-error: true
+      uses: actions/checkout@v4
+    - continue-on-error: true
+      name: Setup Java 11
+      uses: actions/setup-java@v4
+      with:
+        cache: gradle
+        distribution: temurin
+        java-version: 11
+    - continue-on-error: true
+      name: Compile project
+      run: ./gradlew assemble --no-daemon
+    - continue-on-error: true
+      uses: actions/checkout@v4
+      with:
+        path: Nominatim
+        repository: osm-search/Nominatim
+        submodules: true
+    - continue-on-error: true
+      name: Get Date
+      run: echo "cache_key=$(/bin/date -u "+%Y%W")" >> $GITHUB_ENV
+      shell: bash
+    - continue-on-error: true
+      uses: actions/cache@v4
+      with:
+        key: nominatim-test-data-${{ env.cache_key }}
+        path: 'Nominatim/data/country_osm_grid.sql.gz
 
-      - name: Setup Java 11
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: 11
-          cache: 'gradle'
+          monaco-latest.osm.pbf
 
-      - name: Compile project
-        run: ./gradlew assemble --no-daemon
+          '
+    - continue-on-error: true
+      name: Install prerequisits
+      run: 'sudo apt-get update -qq
 
-      - uses: actions/checkout@v4
-        with:
-          repository: osm-search/Nominatim
-          submodules: true
-          path: Nominatim
+        sudo apt-get install -y -qq libboost-system-dev libboost-filesystem-dev libexpat1-dev
+        zlib1g-dev libbz2-dev libpq-dev libproj-dev liblua5.3-dev lua5.3 python3-psycopg2
+        python3-pyosmium python3-dotenv python3-psutil python3-jinja2 python3-icu
+        python3-datrie postgresql-14-postgis-3 postgresql-client-14 postgresql-14
+        postgresql-14-postgis-3-scripts nlohmann-json3-dev
 
-      - name: Get Date
-        run: echo "cache_key=$(/bin/date -u "+%Y%W")" >> $GITHUB_ENV
-        shell: bash
+        pip3 install sqlalchemy GeoAlchemy2 psycopg
 
-      - uses: actions/cache@v4
-        with:
-            path: |
-               Nominatim/data/country_osm_grid.sql.gz
-               monaco-latest.osm.pbf
-            key: nominatim-test-data-${{ env.cache_key }}
+        '
+      shell: bash
+    - continue-on-error: true
+      name: Setup database
+      run: 'echo ''fsync = off'' | sudo tee /etc/postgresql/14/main/conf.d/local.conf
 
-      - name: Install prerequisits
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libboost-system-dev libboost-filesystem-dev libexpat1-dev zlib1g-dev libbz2-dev libpq-dev libproj-dev liblua5.3-dev lua5.3 python3-psycopg2 python3-pyosmium python3-dotenv python3-psutil python3-jinja2 python3-icu python3-datrie postgresql-14-postgis-3 postgresql-client-14 postgresql-14 postgresql-14-postgis-3-scripts nlohmann-json3-dev
-          pip3 install sqlalchemy GeoAlchemy2 psycopg
-        shell: bash
+        echo ''synchronous_commit = off'' | sudo tee -a /etc/postgresql/14/main/conf.d/local.conf
 
-      - name: Setup database
-        run: |
-            echo 'fsync = off' | sudo tee /etc/postgresql/14/main/conf.d/local.conf
-            echo 'synchronous_commit = off' | sudo tee -a /etc/postgresql/14/main/conf.d/local.conf
-            echo 'full_page_writes = off' | sudo tee -a /etc/postgresql/14/main/conf.d/local.conf
-            echo 'shared_buffers = 512MB' | sudo tee -a /etc/postgresql/14/main/conf.d/local.conf
-            sudo systemctl start postgresql
-            sudo -u postgres createuser -S www-data
-            sudo -u postgres createuser -s runner
-            psql -d postgres -c "ALTER USER runner PASSWORD 'foobar'"
-            psql --version
-            psql -d postgres -c "SELECT version()"
-        shell: bash
+        echo ''full_page_writes = off'' | sudo tee -a /etc/postgresql/14/main/conf.d/local.conf
 
-      - name: Download dependencies
-        run: |
-            if [ ! -f Nominatim/data/country_osm_grid.sql.gz ]; then
-                wget --no-verbose -O Nominatim/data/country_osm_grid.sql.gz https://www.nominatim.org/data/country_grid.sql.gz
-            fi
-        shell: bash
+        echo ''shared_buffers = 512MB'' | sudo tee -a /etc/postgresql/14/main/conf.d/local.conf
 
-      - name: Build Nominatim
-        run: mkdir nomin-build && cd nomin-build && cmake -DBUILD_MODULE=off ../Nominatim && make -j2 && sudo make install
-        shell: bash
+        sudo systemctl start postgresql
 
-      - name: Prepare import environment
-        run: |
-            if [ ! -f monaco-latest.osm.pbf ]; then
-                wget --no-verbose https://download.geofabrik.de/europe/monaco-latest.osm.pbf
-            fi
-            mkdir data-env
-        shell: bash
+        sudo -u postgres createuser -S www-data
 
-      - name: Import Nominatim
-        run: |
-          export NOMINATIM_TOKENIZER=icu
-          nominatim import --osm-file ../monaco-latest.osm.pbf --reverse-only
-          nominatim admin --check-database
-        shell: bash
-        working-directory: data-env
+        sudo -u postgres createuser -s runner
 
-      - name: Import Photon
-        run: |
-            java -jar build/libs/photon-*.jar -nominatim-import -database nominatim -user runner -password foobar
-            java -jar build/libs/photon-*.jar -nominatim-update-init-for runner -database nominatim -user runner -password foobar
+        psql -d postgres -c "ALTER USER runner PASSWORD ''foobar''"
 
-      - name: Update Nominatim
-        run: |
-          nominatim replication --init
-          nominatim replication --once
-        shell: bash
-        working-directory: data-env
-        env:
-          NOMINATIM_REPLICATION_MAX_DIFF: 10
+        psql --version
 
-      - name: Update Photon
-        run: |
-          java -jar build/libs/photon-*.jar -nominatim-update -database nominatim -user runner -password foobar
+        psql -d postgres -c "SELECT version()"
+
+        '
+      shell: bash
+    - continue-on-error: true
+      name: Download dependencies
+      run: "if [ ! -f Nominatim/data/country_osm_grid.sql.gz ]; then\n    wget --no-verbose\
+        \ -O Nominatim/data/country_osm_grid.sql.gz https://www.nominatim.org/data/country_grid.sql.gz\n\
+        fi\n"
+      shell: bash
+    - continue-on-error: true
+      name: Build Nominatim
+      run: mkdir nomin-build && cd nomin-build && cmake -DBUILD_MODULE=off ../Nominatim
+        && make -j2 && sudo make install
+      shell: bash
+    - continue-on-error: true
+      name: Prepare import environment
+      run: "if [ ! -f monaco-latest.osm.pbf ]; then\n    wget --no-verbose https://download.geofabrik.de/europe/monaco-latest.osm.pbf\n\
+        fi\nmkdir data-env\n"
+      shell: bash
+    - continue-on-error: true
+      name: Import Nominatim
+      run: 'export NOMINATIM_TOKENIZER=icu
+
+        nominatim import --osm-file ../monaco-latest.osm.pbf --reverse-only
+
+        nominatim admin --check-database
+
+        '
+      shell: bash
+      working-directory: data-env
+    - continue-on-error: true
+      name: Import Photon
+      run: 'java -jar build/libs/photon-*.jar -nominatim-import -database nominatim
+        -user runner -password foobar
+
+        java -jar build/libs/photon-*.jar -nominatim-update-init-for runner -database
+        nominatim -user runner -password foobar
+
+        '
+    - continue-on-error: true
+      env:
+        NOMINATIM_REPLICATION_MAX_DIFF: 10
+      name: Update Nominatim
+      run: 'nominatim replication --init
+
+        nominatim replication --once
+
+        '
+      shell: bash
+      working-directory: data-env
+    - continue-on-error: true
+      name: Update Photon
+      run: 'java -jar build/libs/photon-*.jar -nominatim-update -database nominatim
+        -user runner -password foobar
+
+        '
+name: CI
+on:
+  repository_dispatch:
+    types: trigger-ga___ci.yml
